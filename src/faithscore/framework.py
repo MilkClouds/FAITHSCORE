@@ -1,23 +1,25 @@
-
-import openai
-import time
-from tqdm import tqdm
 import argparse
 import os
 import re
-from modelscope.utils.constant import Tasks
+import time
+
+import nltk
+import openai
 from modelscope.pipelines import pipeline
 from modelscope.preprocessors.multi_modal import OfaPreprocessor
-from faithscore.llava15 import LLaVA
-from faithscore.llama_pre import load_llama, stage1_llama
-from faithscore.utils import llava15, ofa
-import nltk
+from modelscope.utils.constant import Tasks
+from tqdm import tqdm
 
+from faithscore.llama_pre import load_llama, stage1_llama
+from faithscore.llava15 import LLaVA
+from faithscore.utils import llava15, ofa
 
 path = os.path.dirname(__file__)
 cur_path = os.path.dirname(path)
 cur_path = os.path.join(cur_path, "faithscore")
-class FaithScore():
+
+
+class FaithScore:
     def __init__(self, vem_type, api_key=None, llava_path=None, tokenzier_path=None, use_llama=False, llama_path=None):
         openai.api_key = api_key
         max_seq_len = 500
@@ -25,7 +27,7 @@ class FaithScore():
         self.use_llama = use_llama
 
         # self.vem_path = model_path
-        self.model_type = vem_type ### [ofa_ve, ofa, mplug, blip2, llava]
+        self.model_type = vem_type  ### [ofa_ve, ofa, mplug, blip2, llava]
         model_list = ["ofa_ve", "ofa", "mplug", "blip2", "llava"]
         if vem_type not in model_list:
             print(f"Error: the model type {vem_type} not in {str(model_list)}")
@@ -45,12 +47,11 @@ class FaithScore():
                 response = openai.ChatCompletion.create(
                     model="gpt-3.5-turbo",
                     messages=[
-                        {"role": "user",
-                         "content": pts},
+                        {"role": "user", "content": pts},
                     ],
                     temperature=0.2,  # TODO: figure out which temperature is best for evaluation
                 )
-                return response['choices'][0]['message']['content']
+                return response["choices"][0]["message"]["content"]
             except Exception as e:
                 print(e)
                 print("Continue......")
@@ -71,7 +72,10 @@ class FaithScore():
             # exit()
         return des_ana
 
-    def stage2(self, labeld_sub_sen, ):
+    def stage2(
+        self,
+        labeld_sub_sen,
+    ):
         all_texts = []
         for ss in labeld_sub_sen:
             desc = ""
@@ -82,12 +86,12 @@ class FaithScore():
             for i in range(len(pos_seg)):
                 if pos_seg[i] in pos_des:
                     if i == 0:
-                        desc += ss[:pos_seg[i] - 1]
+                        desc += ss[: pos_seg[i] - 1]
                     else:
-                        desc += ss[pos_seg[i - 1] + 3:pos_seg[i] - 1]
+                        desc += ss[pos_seg[i - 1] + 3 : pos_seg[i] - 1]
             all_texts.append(desc.replace("\n", " "))
 
-        with open(os.path.join(cur_path, "prompts/prompt_de_atomic.txt"), 'r') as f:
+        with open(os.path.join(cur_path, "prompts/prompt_de_atomic.txt"), "r") as f:
             prompt_de_atomic = f.read()
         Entities = []
         Relations = []
@@ -139,7 +143,9 @@ class FaithScore():
                         other = []
                     Others.append(other)
 
-        hallucinations = [Entities[i] + Relations[i] + Colors[i] + Counting[i] + Others[i] for i in range(len(Entities))]
+        hallucinations = [
+            Entities[i] + Relations[i] + Colors[i] + Counting[i] + Others[i] for i in range(len(Entities))
+        ]
         # print(hallucinations)
         return hallucinations, Entities, Relations, Colors, Counting, Others
 
@@ -147,15 +153,16 @@ class FaithScore():
         # ofa_pipe = pipeline(Tasks.visual_entailment, model='damo/ofa_visual-entailment_snli-ve_large_en')
         # model = pipeline(Tasks.visual_entailment, model=self.vem_path)
         if self.model_type == "ofa_ve":
-            model = pipeline(Tasks.visual_entailment, model='damo/ofa_visual-entailment_snli-ve_large_en')
+            model = pipeline(Tasks.visual_entailment, model="damo/ofa_visual-entailment_snli-ve_large_en")
 
         if self.model_type == "ofa":
             preprocessor = OfaPreprocessor(model_dir="damo/ofa_visual-question-answering_pretrain_large_en")
             model = pipeline(
                 Tasks.visual_question_answering,
                 model="damo/ofa_visual-question-answering_pretrain_large_en",
-                model_revision='v1.0.1',
-                preprocessor=preprocessor)
+                model_revision="v1.0.1",
+                preprocessor=preprocessor,
+            )
 
         if self.model_type == "llava":
             if not self.llava_path:
@@ -177,7 +184,11 @@ class FaithScore():
 
             for element in elements:
                 # input = {'image': image, 'text': element}
-                prompt = 'Statement: ' + element + ' Is this statement is right according to the image? Please answer yes or no.'
+                prompt = (
+                    "Statement: "
+                    + element
+                    + " Is this statement is right according to the image? Please answer yes or no."
+                )
                 if self.model_type == "ofa_ve":
                     output = ofa(True, model, element, image)
                 if self.model_type == "ofa":
@@ -201,7 +212,7 @@ class FaithScore():
                 # else:
                 #     fact_score.append(0)
             fact_scores.append(fact_score)
-                # result.append(output[OutputKeys.LABELS])
+            # result.append(output[OutputKeys.LABELS])
             # results.append({"image": images_id[id], "facts": elements, "result": str(result)})
             # checking_results.append(result)
 
@@ -209,9 +220,10 @@ class FaithScore():
         # print("Overall score: ", sum(instance_score) / len(instance_score))
 
         return sum(instance_score) / len(instance_score), fact_scores
-    '''
+
+    """
     answers: a list of strings, each element in this list is an answer
-    '''
+    """
 
     def faithscore(self, answers, images):
         ## Stage 1: Sub-setence Identification
@@ -221,7 +233,9 @@ class FaithScore():
         ### Stage 3: Verification
         # print(atomic_facts)
         score, fact_scores = self.stage3(atomic_facts, images)
-        sentence_score = self.sentence_faithscore(Entities, Relations, Colors, Counting, Others, self.labeled_sub(labeld_sub_sen), fact_scores)
+        sentence_score = self.sentence_faithscore(
+            Entities, Relations, Colors, Counting, Others, self.labeled_sub(labeld_sub_sen), fact_scores
+        )
         return score, sentence_score
 
     def sentence_faithscore(self, Entities, Relations, Colors, Counting, Others, all_texts, fact_scores):
@@ -234,7 +248,7 @@ class FaithScore():
                 sentence = nltk.sent_tokenize(ent)
                 tags = nltk.pos_tag(nltk.word_tokenize(sentence[0]))
                 for tag in tags:
-                    if tag[1] in ['NN', 'NNS', 'JJ', 'NNP', 'VBG', 'JJR', 'NNPS', 'RB', 'DT']:
+                    if tag[1] in ["NN", "NNS", "JJ", "NNP", "VBG", "JJR", "NNPS", "RB", "DT"]:
                         # print(tag)
                         ent4sen.append(tag[0])
                     # tags.append(chunk.label())
@@ -257,16 +271,26 @@ class FaithScore():
         other_scores = []
 
         for i in range(len(fact_scores)):
-            entity_scores.append(fact_scores[i][:len(Entities[i])])
-            relation_scores.append(fact_scores[i][len(Entities[i]): len(Entities[i]) + len(Relations[i])])
-            color_scores.append(fact_scores[i][
-                                len(Entities[i]) + len(Relations[i]):  len(Entities[i]) + len(Relations[i]) + len(
-                                    Colors[i])])
-            count_scores.append(fact_scores[i][
-                                len(Entities[i]) + len(Relations[i]) + len(Colors[i]):  len(Entities[i]) + len(
-                                    Relations[i]) + len(Colors[i]) + len(Counting[i])])
+            entity_scores.append(fact_scores[i][: len(Entities[i])])
+            relation_scores.append(fact_scores[i][len(Entities[i]) : len(Entities[i]) + len(Relations[i])])
+            color_scores.append(
+                fact_scores[i][
+                    len(Entities[i]) + len(Relations[i]) : len(Entities[i]) + len(Relations[i]) + len(Colors[i])
+                ]
+            )
+            count_scores.append(
+                fact_scores[i][
+                    len(Entities[i])
+                    + len(Relations[i])
+                    + len(Colors[i]) : len(Entities[i])
+                    + len(Relations[i])
+                    + len(Colors[i])
+                    + len(Counting[i])
+                ]
+            )
             other_scores.append(
-                fact_scores[i][len(Entities[i]) + len(Relations[i]) + len(Colors[i]) + len(Counting[i]):])
+                fact_scores[i][len(Entities[i]) + len(Relations[i]) + len(Colors[i]) + len(Counting[i]) :]
+            )
 
         sentence_scores = []
         for id1, ins in enumerate(all_texts):
@@ -294,11 +318,11 @@ class FaithScore():
                 sentence_score.append(flag)
             sentence_scores.append(sentence_score)
 
-        score4sen = [sum(ss)/len(ss) if len(ss) > 0 else 1 for ss in sentence_scores]
+        score4sen = [sum(ss) / len(ss) if len(ss) > 0 else 1 for ss in sentence_scores]
         sentence_level_score = score4sen
         # print(score4sen)
         # print(sum(score4sen)/len(score4sen))
-        return sum(score4sen)/len(score4sen)
+        return sum(score4sen) / len(score4sen)
 
     def labeled_sub(self, des_ana):
         all_texts = []
@@ -311,8 +335,8 @@ class FaithScore():
             for i in range(len(pos_seg)):
                 if pos_seg[i] in pos_des:
                     if i == 0:
-                        desc.append(ss[:pos_seg[i] - 1])
+                        desc.append(ss[: pos_seg[i] - 1])
                     else:
-                        desc.append(ss[pos_seg[i - 1] + 3:pos_seg[i] - 1])
+                        desc.append(ss[pos_seg[i - 1] + 3 : pos_seg[i] - 1])
             all_texts.append(desc)
         return all_texts
