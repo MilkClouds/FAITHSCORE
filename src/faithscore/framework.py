@@ -1,5 +1,6 @@
 import argparse
 import os
+import pickle
 import re
 import time
 
@@ -86,16 +87,16 @@ class FaithScore:
         # results = joblib.Parallel(n_jobs=16)(joblib.delayed(self.call_openai)(pts) for pts in inputs)
 
         results = []
-        batch_size = 12
-        for batch in trange(0, len(inputs), batch_size):
+        api_batch_size = 12
+        for batch in trange(0, len(inputs), api_batch_size):
 
             async def task():
                 return await asyncio.gather(
-                    *[self.async_call_openai(pts) for pts in inputs[batch : min(batch + batch_size, len(inputs))]]
+                    *[self.async_call_openai(pts) for pts in inputs[batch : min(batch + api_batch_size, len(inputs))]]
                 )
 
             results = results + asyncio.run(task())
-            time.sleep(0.5)
+            time.sleep(0.7)
 
         # print(inputs, len(inputs))
         # results = pqdm(inputs, self.call_openai, n_jobs=16, exception_behaviour="immediate")
@@ -305,7 +306,95 @@ class FaithScore:
         sentence_score = self.sentence_faithscore(
             Entities, Relations, Colors, Counting, Others, self.labeled_sub(labeld_sub_sen), fact_scores
         )
-        return score, sentence_score, (Entities, Relations, Colors, Counting, Others, labeld_sub_sen, fact_scores)
+        return score, sentence_score
+
+    def cached_faithscore(self, name, answers, images):
+        # file-cache each step with name
+        # if file exists, load and return
+        # else, run faithscore and save to file
+
+        def filecache(name, fn, *args):
+            path = f"cache/{name}.pkl"
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    return pickle.load(f)
+            else:
+                result = fn(*args)
+                with open(path, "wb") as f:
+                    pickle.dump(result, f)
+                return result
+
+        labeld_sub_sen = filecache(f"{name}_stage1", self.stage1, answers)
+        atomic_facts, Entities, Relations, Colors, Counting, Others = filecache(
+            f"{name}_stage2", self.stage2, labeld_sub_sen
+        )
+        score, fact_scores = filecache(f"{name}_stage3", self.stage3, atomic_facts, images)
+        score_per_type = filecache(
+            f"{name}_score_per_type",
+            self.get_score_per_type,
+            fact_scores,
+            Entities,
+            Relations,
+            Colors,
+            Counting,
+            Others,
+        )
+        sentence_score = filecache(
+            f"{name}_sentence_faithscore",
+            self.sentence_faithscore,
+            Entities,
+            Relations,
+            Colors,
+            Counting,
+            Others,
+            self.labeled_sub(labeld_sub_sen),
+            fact_scores,
+        )
+        # write score, score_per_type, sentence_score as txt file
+        with open(f"cache/{name}.txt", "w") as f:
+            f.write(f"score: {score}\n")
+            f.write(f"score_per_type: {score_per_type}\n")
+            f.write(f"sentence_score: {sentence_score}\n")
+        return score, score_per_type, sentence_score
+
+    def get_score_per_type(self, fact_scores, entities, relations, colors, counting, others):
+        entity_scores = []
+        relation_scores = []
+        color_scores = []
+        count_scores = []
+        other_scores = []
+        for i in range(len(fact_scores)):
+            entity_scores.append(fact_scores[i][: len(entities[i])])
+            relation_scores.append(fact_scores[i][len(entities[i]) : len(entities[i]) + len(relations[i])])
+            color_scores.append(
+                fact_scores[i][
+                    len(entities[i]) + len(relations[i]) : len(entities[i]) + len(relations[i]) + len(colors[i])
+                ]
+            )
+            count_scores.append(
+                fact_scores[i][
+                    len(entities[i])
+                    + len(relations[i])
+                    + len(colors[i]) : len(entities[i])
+                    + len(relations[i])
+                    + len(colors[i])
+                    + len(counting[i])
+                ]
+            )
+            other_scores.append(
+                fact_scores[i][len(entities[i]) + len(relations[i]) + len(colors[i]) + len(counting[i]) :]
+            )
+        entity_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in entity_scores]
+        relation_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in relation_scores]
+        color_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in color_scores]
+        count_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in count_scores]
+        other_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in other_scores]
+        entity_scores = sum(entity_scores) / len(entity_scores)
+        relation_scores = sum(relation_scores) / len(relation_scores)
+        color_scores = sum(color_scores) / len(color_scores)
+        count_scores = sum(count_scores) / len(count_scores)
+        other_scores = sum(other_scores) / len(other_scores)
+        return entity_scores, relation_scores, color_scores, count_scores, other_scores
 
     def sentence_faithscore(self, Entities, Relations, Colors, Counting, Others, all_texts, fact_scores):
         Entities_recog = []
