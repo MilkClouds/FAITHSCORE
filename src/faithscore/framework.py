@@ -57,14 +57,65 @@ class FaithScore:
                 print("Continue......")
                 time.sleep(10)
 
+    async def async_call_openai(self, pts):
+        while True:
+            try:
+                response = await openai.ChatCompletion.acreate(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": pts},
+                    ],
+                    temperature=0.2,  # TODO: figure out which temperature is best for evaluation
+                    timeout=2,
+                )
+                return response["choices"][0]["message"]["content"]
+            except Exception as e:
+                print(e)
+                print("Continue......")
+                time.sleep(10)
+
+    def batched_call_openai(self, inputs):
+        import asyncio
+        import time
+
+        from tqdm.auto import tqdm, trange
+
+        # import multiprocessing
+        # import joblib
+        # from pqdm.processes import pqdm
+        # results = joblib.Parallel(n_jobs=16)(joblib.delayed(self.call_openai)(pts) for pts in inputs)
+
+        results = []
+        batch_size = 12
+        for batch in trange(0, len(inputs), batch_size):
+
+            async def task():
+                return await asyncio.gather(
+                    *[self.async_call_openai(pts) for pts in inputs[batch : min(batch + batch_size, len(inputs))]]
+                )
+
+            results = results + asyncio.run(task())
+            time.sleep(0.5)
+
+        # print(inputs, len(inputs))
+        # results = pqdm(inputs, self.call_openai, n_jobs=16, exception_behaviour="immediate")
+        return results
+
     def stage1(self, answers):
         with open(os.path.join(cur_path, "prompts/prompt_label_des_ana.txt"), "r") as f:
             prompt_label_des_ana = f.read() + "\n\n"
-        des_ana = []
-        for id in tqdm(range(len(answers))):
+        tasks = []
+        for id in range(len(answers)):
             if not self.use_llama:
                 pts = prompt_label_des_ana + answers[id].replace("\n", " ") + "\n" + "Labeled text: "
-                des_ana.append(self.call_openai(pts).replace("\n", ""))
+                tasks.append(pts)
+        outputs = self.batched_call_openai(tasks)
+        des_ana = []
+        for id in range(len(answers)):
+            if not self.use_llama:
+                pts = prompt_label_des_ana + answers[id].replace("\n", " ") + "\n" + "Labeled text: "
+                # des_ana.append(self.call_openai(pts).replace("\n", ""))
+                des_ana.append(outputs[id].replace("\n", ""))
             else:
                 pts = stage1_llama(self.llama, self.tokenizer, answers[id].replace("\n", " "))
                 # print(pts)
@@ -101,13 +152,23 @@ class FaithScore:
 
         results = []
         nons = "Entities:\nRelations:\nColors:\nCounting:\nOther attributes:"
-        for ans in tqdm(all_texts):
+        futures = []
+        for ans in all_texts:
+            ans = ans.replace("\n", "")
+            pts = prompt_de_atomic + "\nAnswer: " + ans
+            futures.append(pts)
+            # response = self.call_openai(pts)
+        outputs = self.batched_call_openai(futures)
+        index = 0
+        for ans in all_texts:
             ans = ans.replace("\n", "")
             pts = prompt_de_atomic + "\nAnswer: " + ans
             if ans == "":
                 results.append(nons)
                 continue
-            response = self.call_openai(pts)
+            # response = self.call_openai(pts)
+            response = outputs[index]
+            index += 1
             if "Entities" in response:
                 results.append(response)
             else:
@@ -152,31 +213,29 @@ class FaithScore:
     def stage3(self, atomic_facts, images, img_path=None):
         # ofa_pipe = pipeline(Tasks.visual_entailment, model='damo/ofa_visual-entailment_snli-ve_large_en')
         # model = pipeline(Tasks.visual_entailment, model=self.vem_path)
-        if self.model_type == "ofa_ve":
-            model = pipeline(Tasks.visual_entailment, model="damo/ofa_visual-entailment_snli-ve_large_en")
+        if getattr(self, "model", None) is None:
+            if self.model_type == "ofa_ve":
+                model = pipeline(Tasks.visual_entailment, model="damo/ofa_visual-entailment_snli-ve_large_en")
 
-        if self.model_type == "ofa":
-            preprocessor = OfaPreprocessor(model_dir="damo/ofa_visual-question-answering_pretrain_large_en")
-            model = pipeline(
-                Tasks.visual_question_answering,
-                model="damo/ofa_visual-question-answering_pretrain_large_en",
-                model_revision="v1.0.1",
-                preprocessor=preprocessor,
-            )
+            if self.model_type == "ofa":
+                preprocessor = OfaPreprocessor(model_dir="damo/ofa_visual-question-answering_pretrain_large_en")
+                model = pipeline(
+                    Tasks.visual_question_answering,
+                    model="damo/ofa_visual-question-answering_pretrain_large_en",
+                    model_revision="v1.0.1",
+                    preprocessor=preprocessor,
+                )
 
-        if self.model_type == "llava":
-            if not self.llava_path:
-                print("Please input path for LLaVA model.")
-                exit()
-            model = LLaVA()
-        # if self.model_type == "mplug":
-        #     output = mplug(image, prompt, model)
-        # if self.model_type == "blip2":
-        #     output = blip_2(image, prompt, model, vis_processors_blip_2)
+            if self.model_type == "llava":
+                if not self.llava_path:
+                    print("Please input path for LLaVA model.")
+                    exit()
+                model = LLaVA(model_path=self.llava_path)
+            self.model = model
+        model = self.model
 
-        fact_scores = []
-        for id, elements in enumerate(tqdm(atomic_facts)):
-            fact_score = []
+        tasks = []
+        for id, elements in enumerate(atomic_facts):
             if img_path:
                 image = os.path.join(img_path, images[id])
             else:
@@ -189,19 +248,29 @@ class FaithScore:
                     + element
                     + " Is this statement is right according to the image? Please answer yes or no."
                 )
-                if self.model_type == "ofa_ve":
-                    output = ofa(True, model, element, image)
-                if self.model_type == "ofa":
-                    output = ofa(False, model, prompt, image)
-                if self.model_type == "llava":
-                    output = llava15(image, prompt, model)
-                # print(output)
-                # if self.model_type == "mplug":
-                #     output = mplug(image, prompt, model)
-                # if self.model_type == "blip2":
-                #     output = blip_2(image, prompt, model, vis_processors_blip_2)
+                tasks.append([element, image])
+                # if self.model_type == "ofa_ve":
+                #     output = ofa(True, model, element, image)
+                # if self.model_type == "ofa":
+                #     output = ofa(False, model, prompt, image)
+                # if self.model_type == "llava":
+                #     output = llava15(image, prompt, model)
+        from modelscope.outputs import OutputKeys
 
-                # output = ofa_pipe(input)[0]
+        inputs = [{"image": image, "text": element} for element, image in tasks]
+        print(len(inputs), len(atomic_facts))
+        outputs = model(inputs, batch_size=16)
+        # print(outputs)
+        # list of {'labels': ['yes'], 'scores': [1.0], 'samples': {'image': '/home/claude/datasets/stanford_image_paragraph/stanford_img/content/stanford_images/2403904.jpg', 'text': 'The trees across from the stop sign are green and healthy'}}, {'labels': ['yes'], 'scores': [1.0], 'samples': {'image': '/home/claude/datasets/stanford_image_paragraph/stanford_img/content/stanford_images/2403904.jpg', 'text': 'The sky is a little cloudy.'}}
+        outputs = [output[OutputKeys.LABELS][0] for output in outputs]
+
+        global_index = 0
+        fact_scores = []
+        for id, elements in enumerate(atomic_facts):
+            fact_score = []
+            for element in elements:
+                output = outputs[global_index]
+                global_index += 1
                 if "yes" in output.lower():
                     fact_score.append(1)
                 else:
@@ -236,7 +305,7 @@ class FaithScore:
         sentence_score = self.sentence_faithscore(
             Entities, Relations, Colors, Counting, Others, self.labeled_sub(labeld_sub_sen), fact_scores
         )
-        return score, sentence_score
+        return score, sentence_score, (Entities, Relations, Colors, Counting, Others, labeld_sub_sen, fact_scores)
 
     def sentence_faithscore(self, Entities, Relations, Colors, Counting, Others, all_texts, fact_scores):
         Entities_recog = []
