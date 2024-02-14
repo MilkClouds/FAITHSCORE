@@ -58,6 +58,28 @@ class FaithScore:
                 print("Continue......")
                 time.sleep(10)
 
+    async def async_call_openai_gpt4(self, pts):
+        # be aware of cost! gpt-4-turbo is 200x more expensive than gpt-3.5-turbo
+        while True:
+            try:
+                response = await openai.ChatCompletion.acreate(
+                    model="gpt-4-turbo-preview",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "Strictly follow the user's instructions and strictly follow the example. Strictly follow the example form and do not say any characters that are not included in the form.",
+                        },
+                        {"role": "user", "content": pts},
+                    ],
+                    temperature=0.0,  # TODO: figure out which temperature is best for evaluation
+                    timeout=2,
+                )
+                return response["choices"][0]["message"]["content"]
+            except Exception as e:
+                print(e)
+                print("Continue......")
+                time.sleep(10)
+
     async def async_call_openai(self, pts):
         while True:
             try:
