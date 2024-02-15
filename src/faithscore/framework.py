@@ -5,6 +5,7 @@ import re
 import time
 
 import nltk
+import numpy as np
 import openai
 from modelscope.pipelines import pipeline
 from modelscope.preprocessors.multi_modal import OfaPreprocessor
@@ -109,7 +110,7 @@ class FaithScore:
         # results = joblib.Parallel(n_jobs=16)(joblib.delayed(self.call_openai)(pts) for pts in inputs)
 
         results = []
-        api_batch_size = 12
+        api_batch_size = 11
         for batch in trange(0, len(inputs), api_batch_size):
 
             async def task():
@@ -118,7 +119,7 @@ class FaithScore:
                 )
 
             results = results + asyncio.run(task())
-            time.sleep(0.7)
+            time.sleep(0.8)
 
         # print(inputs, len(inputs))
         # results = pqdm(inputs, self.call_openai, n_jobs=16, exception_behaviour="immediate")
@@ -380,12 +381,14 @@ class FaithScore:
         return score, score_per_type, sentence_score
 
     def get_score_per_type(self, fact_scores, entities, relations, colors, counting, others):
+        scores = []
         entity_scores = []
         relation_scores = []
         color_scores = []
         count_scores = []
         other_scores = []
         for i in range(len(fact_scores)):
+            scores.append(fact_scores[i])
             entity_scores.append(fact_scores[i][: len(entities[i])])
             relation_scores.append(fact_scores[i][len(entities[i]) : len(entities[i]) + len(relations[i])])
             color_scores.append(
@@ -406,17 +409,20 @@ class FaithScore:
             other_scores.append(
                 fact_scores[i][len(entities[i]) + len(relations[i]) + len(colors[i]) + len(counting[i]) :]
             )
-        entity_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in entity_scores]
-        relation_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in relation_scores]
-        color_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in color_scores]
-        count_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in count_scores]
-        other_scores = [sum(ii) / len(ii) if len(ii) > 0 else 0 for ii in other_scores]
-        entity_scores = sum(entity_scores) / len(entity_scores)
-        relation_scores = sum(relation_scores) / len(relation_scores)
-        color_scores = sum(color_scores) / len(color_scores)
-        count_scores = sum(count_scores) / len(count_scores)
-        other_scores = sum(other_scores) / len(other_scores)
-        return entity_scores, relation_scores, color_scores, count_scores, other_scores
+        mean = lambda x: np.mean(x) if len(x) > 0 else 0
+        scores = [(mean(x), np.sum(x)) for x in scores]
+        entity_scores = [(mean(x), np.sum(x)) for x in entity_scores]
+        relation_scores = [(mean(x), np.sum(x)) for x in relation_scores]
+        color_scores = [(mean(x), np.sum(x)) for x in color_scores]
+        count_scores = [(mean(x), np.sum(x)) for x in count_scores]
+        other_scores = [(mean(x), np.sum(x)) for x in other_scores]
+        scores = (mean([x[0] for x in scores]), mean([x[1] for x in scores]))
+        entity_scores = (mean([x[0] for x in entity_scores]), mean([x[1] for x in entity_scores]))
+        relation_scores = (mean([x[0] for x in relation_scores]), mean([x[1] for x in relation_scores]))
+        color_scores = (mean([x[0] for x in color_scores]), mean([x[1] for x in color_scores]))
+        count_scores = (mean([x[0] for x in count_scores]), mean([x[1] for x in count_scores]))
+        other_scores = (mean([x[0] for x in other_scores]), mean([x[1] for x in other_scores]))
+        return scores, entity_scores, relation_scores, color_scores, count_scores, other_scores
 
     def sentence_faithscore(self, Entities, Relations, Colors, Counting, Others, all_texts, fact_scores):
         Entities_recog = []
@@ -434,7 +440,7 @@ class FaithScore:
                     # tags.append(chunk.label())
                 if len(ent4sen) < 1:
                     print(tags)
-                    exit()
+                    ent4sen = ["None"]
                 entities.append(ent4sen[-1])
 
             # print(ents)
