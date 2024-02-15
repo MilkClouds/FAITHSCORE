@@ -21,6 +21,18 @@ cur_path = os.path.dirname(path)
 cur_path = os.path.join(cur_path, "faithscore")
 
 
+def filecache(name, fn, *args):
+    path = f"cache/{name}.pkl"
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    else:
+        result = fn(*args)
+        with open(path, "wb") as f:
+            pickle.dump(result, f)
+        return result
+
+
 class FaithScore:
     def __init__(self, vem_type, api_key=None, llava_path=None, tokenzier_path=None, use_llama=False, llama_path=None):
         openai.api_key = api_key
@@ -336,17 +348,6 @@ class FaithScore:
         # if file exists, load and return
         # else, run faithscore and save to file
 
-        def filecache(name, fn, *args):
-            path = f"cache/{name}.pkl"
-            if os.path.exists(path):
-                with open(path, "rb") as f:
-                    return pickle.load(f)
-            else:
-                result = fn(*args)
-                with open(path, "wb") as f:
-                    pickle.dump(result, f)
-                return result
-
         labeld_sub_sen = filecache(f"{name}_stage1", self.stage1, answers)
         atomic_facts, Entities, Relations, Colors, Counting, Others = filecache(
             f"{name}_stage2", self.stage2, labeld_sub_sen
@@ -373,12 +374,58 @@ class FaithScore:
             self.labeled_sub(labeld_sub_sen),
             fact_scores,
         )
+        sentence_score_per_type = [
+            self.sentence_faithscore(
+                Entities, Relations, Colors, Counting, Others, self.labeled_sub(labeld_sub_sen), fact_scores, i
+            )
+            for i in range(5)
+        ]
+
         # write score, score_per_type, sentence_score as txt file
         with open(f"cache/{name}.txt", "w") as f:
             f.write(f"score: {score}\n")
             f.write(f"score_per_type: {score_per_type}\n")
             f.write(f"sentence_score: {sentence_score}\n")
-        return score, score_per_type, sentence_score
+            f.write(f"sentence_score_per_type: {sentence_score_per_type}\n")
+        return score, score_per_type, sentence_score, sentence_score_per_type
+
+    def visualize_result(self, name, answers, images):
+        labeld_sub_sen = filecache(f"{name}_stage1", self.stage1, answers)
+        atomic_facts, Entities, Relations, Colors, Counting, Others = filecache(
+            f"{name}_stage2", self.stage2, labeld_sub_sen
+        )
+        score, fact_scores = filecache(f"{name}_stage3", self.stage3, atomic_facts, images)
+        # visualize 2 results in one image
+        from pathlib import Path
+
+        import matplotlib.pyplot as plt
+        from PIL import Image
+
+        Path("result").mkdir(exist_ok=True, parents=True)
+
+        for i in range(8):
+            image_path = images[i]
+            # show image and entities, relations, colors, counting, others in one plot
+            img = Image.open(image_path)
+            plt.imshow(img)
+            # insert text
+            # text = ""
+            # if len(Entities[i]) > 0:
+            #     text += f"Entities: {Entities[i]}\n"
+            # if len(Relations[i]) > 0:
+            #     text += f"Relations: {Relations[i]}\n"
+            # if len(Colors[i]) > 0:
+            #     text += f"Colors: {Colors[i]}\n"
+            # if len(Counting[i]) > 0:
+            #     text += f"Counting: {Counting[i]}\n"
+            # if len(Others[i]) > 0:
+            #     text += f"Others: {Others[i]}\n"
+            text = f"image:{Path(images[i]).name}\nanswer:{answers[i]}\nscores: {fact_scores[i]}\nEntities: {Entities[i]}\nRelations: {Relations[i]}\nColors: {Colors[i]}\nCounting: {Counting[i]}\nOthers: {Others[i]}"
+            with open(f"result/{name}_stage2_{i}.txt", "w") as f:
+                f.write(text)
+            # plt.text(0, 0, text, fontsize=12, color="red")
+            plt.savefig(f"result/{name}_stage2_{i}.png")
+        return
 
     def get_score_per_type(self, fact_scores, entities, relations, colors, counting, others):
         scores = []
@@ -410,12 +457,13 @@ class FaithScore:
                 fact_scores[i][len(entities[i]) + len(relations[i]) + len(colors[i]) + len(counting[i]) :]
             )
         mean = lambda x: np.mean(x) if len(x) > 0 else 0
-        scores = [(mean(x), np.sum(x)) for x in scores]
-        entity_scores = [(mean(x), np.sum(x)) for x in entity_scores]
-        relation_scores = [(mean(x), np.sum(x)) for x in relation_scores]
-        color_scores = [(mean(x), np.sum(x)) for x in color_scores]
-        count_scores = [(mean(x), np.sum(x)) for x in count_scores]
-        other_scores = [(mean(x), np.sum(x)) for x in other_scores]
+        wrong_sum = lambda x: np.sum(1 - np.array(x))
+        scores = [(mean(x), wrong_sum(x)) for x in scores]
+        entity_scores = [(mean(x), wrong_sum(x)) for x in entity_scores]
+        relation_scores = [(mean(x), wrong_sum(x)) for x in relation_scores]
+        color_scores = [(mean(x), wrong_sum(x)) for x in color_scores]
+        count_scores = [(mean(x), wrong_sum(x)) for x in count_scores]
+        other_scores = [(mean(x), wrong_sum(x)) for x in other_scores]
         scores = (mean([x[0] for x in scores]), mean([x[1] for x in scores]))
         entity_scores = (mean([x[0] for x in entity_scores]), mean([x[1] for x in entity_scores]))
         relation_scores = (mean([x[0] for x in relation_scores]), mean([x[1] for x in relation_scores]))
@@ -424,7 +472,9 @@ class FaithScore:
         other_scores = (mean([x[0] for x in other_scores]), mean([x[1] for x in other_scores]))
         return scores, entity_scores, relation_scores, color_scores, count_scores, other_scores
 
-    def sentence_faithscore(self, Entities, Relations, Colors, Counting, Others, all_texts, fact_scores):
+    def sentence_faithscore(
+        self, Entities, Relations, Colors, Counting, Others, all_texts, fact_scores, use_only=None
+    ):
         Entities_recog = []
 
         for ents in Entities:
@@ -486,19 +536,19 @@ class FaithScore:
                 # print(Entities_recog)
                 # print(entity_scores)
                 for id3, ee in enumerate(Entities_recog[id1]):
-                    if ee in sub_sen and entity_scores[id1][id3] != 1:
+                    if ee in sub_sen and entity_scores[id1][id3] != 1 and use_only in (0, None):
                         flag = False
                     for id4, rel in enumerate(relation_scores[id1]):
-                        if ee in sub_sen and ee in Relations[id1][id4] and rel != 1:
+                        if ee in sub_sen and ee in Relations[id1][id4] and rel != 1 and use_only in (1, None):
                             flag = False
                     for id4, rel in enumerate(color_scores[id1]):
-                        if ee in sub_sen and ee in Colors[id1][id4] and rel != 1:
+                        if ee in sub_sen and ee in Colors[id1][id4] and rel != 1 and use_only in (2, None):
                             flag = False
                     for id4, rel in enumerate(count_scores[id1]):
-                        if ee in sub_sen and ee in Counting[id1][id4] and rel != 1:
+                        if ee in sub_sen and ee in Counting[id1][id4] and rel != 1 and use_only in (3, None):
                             flag = False
                     for id4, rel in enumerate(other_scores[id1]):
-                        if ee in sub_sen and ee in Others[id1][id4] and rel != 1:
+                        if ee in sub_sen and ee in Others[id1][id4] and rel != 1 and use_only in (4, None):
                             flag = False
 
                 sentence_score.append(flag)
