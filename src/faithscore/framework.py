@@ -19,6 +19,8 @@ from faithscore.utils import llava15, ofa
 path = os.path.dirname(__file__)
 cur_path = os.path.dirname(path)
 cur_path = os.path.join(cur_path, "faithscore")
+API_BATCH_SIZE = 100 # 10 for Tier 3, 100 for Tier 5
+OFA_VE_BATCH_SIZE = 12 # 34G for 12, gpu util low
 
 
 def filecache(name, fn, *args):
@@ -37,7 +39,6 @@ class FaithScore:
     def __init__(self, vem_type, api_key=None, llava_path=None, tokenzier_path=None, use_llama=False, llama_path=None):
         openai.api_key = api_key
         max_seq_len = 500
-        max_batch_size = 1
         self.use_llama = use_llama
 
         # self.vem_path = model_path
@@ -122,12 +123,11 @@ class FaithScore:
         # results = joblib.Parallel(n_jobs=16)(joblib.delayed(self.call_openai)(pts) for pts in inputs)
 
         results = []
-        api_batch_size = 11
-        for batch in trange(0, len(inputs), api_batch_size):
+        for batch in trange(0, len(inputs), API_BATCH_SIZE):
 
             async def task():
                 return await asyncio.gather(
-                    *[self.async_call_openai(pts) for pts in inputs[batch : min(batch + api_batch_size, len(inputs))]]
+                    *[self.async_call_openai(pts) for pts in inputs[batch : min(batch + API_BATCH_SIZE, len(inputs))]]
                 )
 
             results = results + asyncio.run(task())
@@ -295,7 +295,7 @@ class FaithScore:
 
         inputs = [{"image": image, "text": element} for element, image in tasks]
         print(len(inputs), len(atomic_facts))
-        outputs = model(inputs, batch_size=16)
+        outputs = model(inputs, batch_size=OFA_VE_BATCH_SIZE)
         # print(outputs)
         # list of {'labels': ['yes'], 'scores': [1.0], 'samples': {'image': '/home/claude/datasets/stanford_image_paragraph/stanford_img/content/stanford_images/2403904.jpg', 'text': 'The trees across from the stop sign are green and healthy'}}, {'labels': ['yes'], 'scores': [1.0], 'samples': {'image': '/home/claude/datasets/stanford_image_paragraph/stanford_img/content/stanford_images/2403904.jpg', 'text': 'The sky is a little cloudy.'}}
         outputs = [output[OutputKeys.LABELS][0] for output in outputs]
@@ -545,10 +545,10 @@ class FaithScore:
                         if ee in sub_sen and ee in Colors[id1][id4] and rel != 1 and use_only in (2, None):
                             flag = False
                     for id4, rel in enumerate(count_scores[id1]):
-                        if ee in sub_sen and ee in Counting[id1][id4] and rel != 1 and use_only in (3, None):
+                        if ee in sub_sen and ee in Counting[id1][id4] and rel != 1 and use_only in (2, None):
                             flag = False
                     for id4, rel in enumerate(other_scores[id1]):
-                        if ee in sub_sen and ee in Others[id1][id4] and rel != 1 and use_only in (4, None):
+                        if ee in sub_sen and ee in Others[id1][id4] and rel != 1 and use_only in (2, None):
                             flag = False
 
                 sentence_score.append(flag)
